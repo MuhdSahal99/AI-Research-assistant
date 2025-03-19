@@ -1,0 +1,134 @@
+/* Custom CSS for Research LLM Platform */
+
+/* Main container styling */
+.main .block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+    color: #1E3A8A;
+    font-weight: 600;
+}
+
+h1 {
+    border-bottom: 2px solid #2563EB;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+/* Metrics styling */
+[data-testid="stMetricValue"] {
+    font-size: 1.8rem !important;
+    font-weight: 600 !important;
+    color: #2563EB !important;
+}
+
+/* Sidebar styling */
+.sidebar .sidebar-content {
+    background-color: #F8FAFC;
+}
+
+/* Card-like containers */
+.css-1r6slb0, .css-12w0qpk {
+    background-color: #FFFFFF;
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+}
+
+/* Button styling */
+.stButton > button {
+    background-color: #3B82F6;
+    color: white;
+    border-radius: 0.375rem;
+    border: none;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+}
+
+.stButton > button:hover {
+    background-color: #2563EB;
+}
+
+/* Expander styling */
+.streamlit-expanderHeader {
+    font-weight: 600;
+    color: #1E3A8A;
+}
+
+/* Tabs styling */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 2rem;
+}
+
+.stTabs [data-baseweb="tab"] {
+    height: 3rem;
+    white-space: pre-wrap;
+    border-radius: 4px 4px 0 0;
+}
+
+.stTabs [aria-selected="true"] {
+    background-color: #EFF6FF;
+    border-bottom: 2px solid #3B82F6;
+}
+
+/* Alert/info box styling */
+.element-container div[data-testid="stAlert"] {
+    border-radius: 0.375rem;
+}
+
+/* Download button styling */
+.stDownloadButton > button {
+    background-color: #10B981;
+    color: white;
+    border-radius: 0.375rem;
+    border: none;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+}
+
+.stDownloadButton > button:hover {
+    background-color: #059669;
+}
+
+/* Progress bar styling */
+.stProgress > div > div {
+    background-color: #3B82F6;
+}
+
+/* Slider styling */
+.stSlider > div[data-baseweb="slider"] > div[data-testid="stThumbValue"] {
+    background-color: #3B82F6;
+}
+
+/* Footer styling */
+footer {
+    border-top: 1px solid #E5E7EB;
+    padding-top: 1rem;
+    font-size: 0.875rem;
+    color: #6B7280;
+    text-align: center;
+}
+
+/* Custom issue containers */
+.issue-container {
+    margin-bottom: 1rem;
+    padding: 1rem;
+    border-left: 4px solid;
+    background-color: rgba(243, 244, 246, 0.5);
+    border-radius: 0 0.375rem 0.375rem 0;
+}
+
+.issue-high {
+    border-color: #EF4444;
+}
+
+.issue-medium {
+    border-color: #F59E0B;
+}
+
+.issue-low {
+    border-color: #6B7280;
+}

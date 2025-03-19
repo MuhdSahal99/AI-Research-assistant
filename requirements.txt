@@ -1,0 +1,28 @@
+# Core application
+streamlit
+python-dotenv
+# API clients
+httpx
+requests
+tenacity
+
+# Document processing
+PyPDF2
+python-docx
+pdfplumber
+nltk
+
+# Data processing
+numpy
+pandas
+
+# Vector databa
+pinecone
+# Visualization
+matplotlib
+plotly
+
+# Utilities
+tqdm
+beautifulsoup4
+lxml
