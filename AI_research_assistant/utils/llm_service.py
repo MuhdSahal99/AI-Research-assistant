@@ -1,17 +1,27 @@
 import httpx
 import json
-import streamlit as st
-import time
-from typing import Dict, List, Any, Optional
+import logging
+import asyncio
+from typing import Dict, List, Any, Optional, Union
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from utils.config import load_config
 
-class GroqLLMService:
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("llm_service")
+
+class LLMService:
     """
-    Service for interacting with Groq's Llama3 API for research analysis.
+    Service for interacting with Groq LLM API for research tasks.
     """
     
     def __init__(self, api_key: str, model: str = "llama3-8b-8192"):
+        """
+        Initialize the LLM service.
+        
+        Args:
+            api_key: Groq API key
+            model: LLM model to use
+        """
         self.api_key = api_key
         self.model = model
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
@@ -29,20 +39,18 @@ class GroqLLMService:
         self, 
         messages: List[Dict[str, str]], 
         temperature: float = 0.2, 
-        max_tokens: int = 2000,
-        stream: bool = False
+        max_tokens: int = 2000
     ) -> Dict[str, Any]:
         """
-        Generate a completion from the LLM using Groq's API.
+        Generate completion using the LLM.
         
         Args:
-            messages: List of message objects with role and content
-            temperature: Controls randomness (lower = more deterministic)
+            messages: List of message objects (system, user, assistant)
+            temperature: Controls randomness
             max_tokens: Maximum tokens to generate
-            stream: Whether to stream the response
             
         Returns:
-            Dictionary containing the LLM response
+            LLM response
         """
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -50,8 +58,7 @@ class GroqLLMService:
                     "model": self.model,
                     "messages": messages,
                     "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "stream": stream
+                    "max_tokens": max_tokens
                 }
                 
                 response = await client.post(
@@ -64,25 +71,28 @@ class GroqLLMService:
                 return response.json()
                 
         except httpx.HTTPStatusError as e:
-            st.error(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+            logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
             raise
         except httpx.RequestError as e:
-            st.error(f"Request error occurred: {str(e)}")
+            logger.error(f"Request error: {str(e)}")
             raise
         except Exception as e:
-            st.error(f"Error calling Groq API: {str(e)}")
+            logger.error(f"Error generating completion: {str(e)}")
             raise
     
     async def analyze_research_quality(self, document_text: str) -> Dict[str, Any]:
         """
-        Analyze the quality of research content using LLM.
+        Analyze research quality using the LLM.
         
         Args:
-            document_text: The text content of the research document
+            document_text: Research document text
             
         Returns:
-            Dictionary with quality analysis results
+            Quality analysis results
         """
+        # Truncate text to a reasonable size
+        text = document_text[:5000]
+        
         prompt = [
             {"role": "system", "content": 
              """You are a research quality assessment AI. Analyze the provided research text for:
@@ -91,77 +101,73 @@ class GroqLLMService:
              3. Methodology gaps
              4. Structural inconsistencies
              
-             Provide a structured analysis with specific examples from the text.
              Format your response as a JSON object with the following structure:
              {
                 "overall_quality_score": 1-10,
                 "argument_strength": {
                     "score": 1-10,
-                    "issues": [{"description": "", "severity": "high/medium/low", "location": ""}]
+                    "issues": [{"description": "", "severity": "high/medium/low"}]
                 },
                 "reference_quality": {
                     "score": 1-10,
-                    "issues": [{"description": "", "severity": "high/medium/low", "location": ""}]
+                    "issues": [{"description": "", "severity": "high/medium/low"}]
                 },
                 "methodology_assessment": {
                     "score": 1-10,
-                    "issues": [{"description": "", "severity": "high/medium/low", "location": ""}]
+                    "issues": [{"description": "", "severity": "high/medium/low"}]
                 },
                 "structural_consistency": {
                     "score": 1-10,
-                    "issues": [{"description": "", "severity": "high/medium/low", "location": ""}]
+                    "issues": [{"description": "", "severity": "high/medium/low"}]
                 },
                 "summary": ""
              }"""
             },
-            {"role": "user", "content": document_text[:15000]}  # Limit text length
+            {"role": "user", "content": text}
         ]
         
         response = await self.generate_completion(
             messages=prompt,
-            temperature=0.1,  # Low temperature for more consistent analysis
+            temperature=0.1,
             max_tokens=2000
         )
         
         try:
             content = response["choices"][0]["message"]["content"]
-            # Extract JSON response - the LLM might wrap the JSON in markdown
-            if "```json" in content:
-                json_str = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                json_str = content.split("```")[1].strip()
-            else:
-                json_str = content
-                
-            analysis_result = json.loads(json_str)
-            return analysis_result
             
+            # Look for start of JSON after introductory text
+            json_start = content.find("{")
+            json_end = content.rfind("}") + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = content[json_start:json_end]
+                return json.loads(json_str)
+            else:
+                return {"error": "Could not find valid JSON in response", "content": content}
         except Exception as e:
-            st.error(f"Error parsing LLM response: {str(e)}")
-            return {
-                "error": "Failed to parse LLM response",
-                "raw_response": response["choices"][0]["message"]["content"]
-            }
+            logger.error(f"Error parsing LLM response: {str(e)}")
+            return {"error": "Failed to parse response", "raw_response": str(response)}
     
-    async def detect_novelty(self, research_text: str, reference_texts: List[str]) -> Dict[str, Any]:
+    async def detect_similarity(self, target_text: str, reference_texts: List[str]) -> Dict[str, Any]:
         """
-        Detect novel contributions and similarities between research texts.
+        Detect similarities between research papers.
         
         Args:
-            research_text: The text to analyze for novelty
-            reference_texts: List of reference texts to compare against
+            target_text: Target research paper text
+            reference_texts: List of reference paper texts
             
         Returns:
-            Dictionary with novelty analysis results
+            Similarity analysis results
         """
-        # Combine reference texts with separators (limit length to avoid token limits)
-        combined_refs = "\n---\n".join(
-            [ref[:3000] for ref in reference_texts[:3]]  # Limit number and size of references
-        )
+        # Truncate texts
+        target = target_text[:10000]
+        refs = [ref[:3000] for ref in reference_texts[:3]]
+        
+        combined_refs = "\n---\n".join(refs)
         
         prompt = [
             {"role": "system", "content": 
-             """You are a research novelty detection AI. Compare the research document with the reference documents and identify:
+             """You are a research similarity detection AI. Compare the target document with the reference documents and identify:
              1. Overlapping content and paraphrasing
              2. Novel contributions and findings
              3. Reused sections with minimal changes
@@ -180,7 +186,7 @@ class GroqLLMService:
              }"""
             },
             {"role": "user", "content": 
-             f"RESEARCH DOCUMENT:\n\n{research_text[:10000]}\n\nREFERENCE DOCUMENTS:\n\n{combined_refs}"}
+             f"TARGET DOCUMENT:\n\n{target}\n\nREFERENCE DOCUMENTS:\n\n{combined_refs}"}
         ]
         
         response = await self.generate_completion(
@@ -191,7 +197,7 @@ class GroqLLMService:
         
         try:
             content = response["choices"][0]["message"]["content"]
-            # Extract JSON response
+            # Extract JSON
             if "```json" in content:
                 json_str = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
@@ -199,40 +205,44 @@ class GroqLLMService:
             else:
                 json_str = content
                 
-            novelty_result = json.loads(json_str)
-            return novelty_result
+            return json.loads(json_str)
             
         except Exception as e:
-            st.error(f"Error parsing LLM novelty response: {str(e)}")
+            logger.error(f"Error parsing similarity response: {str(e)}")
             return {
-                "error": "Failed to parse LLM response",
+                "error": "Failed to parse response",
                 "raw_response": response["choices"][0]["message"]["content"]
             }
     
     async def generate_summary(self, document_text: str, summary_type: str = "general") -> Dict[str, Any]:
         """
-        Generate a summary of the research document.
+        Generate research paper summary.
         
         Args:
-            document_text: The text content of the research document
-            summary_type: Type of summary to generate (general, reviewer, editor)
+            document_text: Research document text
+            summary_type: Type of summary (general, reviewer, editor)
             
         Returns:
-            Dictionary with summary information
+            Summary results
         """
-        prompt_template = {
-            "general": "Create a comprehensive but concise summary of this research paper. Include the main research question, methodology, findings, and contributions.",
-            "reviewer": "Create a reviewer-focused summary of this research paper. Highlight key points that a reviewer should focus on, including methodology, claims, evidence, and potential issues.",
-            "editor": "Create an editor-focused summary of this research paper. Focus on novelty, significance, technical quality, and potential impact in the field."
+        # Truncate text
+        text = document_text[:15000]
+        
+        # Different prompt based on summary type
+        type_prompts = {
+            "general": "Create a comprehensive but concise summary of this research paper.",
+            "reviewer_focused": "Create a reviewer-focused summary highlighting methodology, claims, and potential issues.",
+            "editor_focused": "Create an editor-focused summary focusing on novelty, significance, and impact."
         }
+        
+        type_prompt = type_prompts.get(summary_type, type_prompts["general"])
         
         prompt = [
             {"role": "system", "content": 
-             """You are a research summarization AI. Generate a clear, concise, and informative summary of the provided research document.
-             Structure your summary in a way that is easy to read and understand.
+             f"""You are a research summarization AI. {type_prompt}
              
              Format your response as a JSON object with the following structure:
-             {
+             {{
                 "title": "",
                 "abstract": "",
                 "key_points": ["", "", ""],
@@ -241,10 +251,9 @@ class GroqLLMService:
                 "limitations": ["", "", ""],
                 "future_work": "",
                 "significance": ""
-             }"""
+             }}"""
             },
-            {"role": "user", "content": 
-             f"{prompt_template.get(summary_type, prompt_template['general'])}\n\nDOCUMENT:\n\n{document_text[:15000]}"}
+            {"role": "user", "content": text}
         ]
         
         response = await self.generate_completion(
@@ -255,7 +264,7 @@ class GroqLLMService:
         
         try:
             content = response["choices"][0]["message"]["content"]
-            # Extract JSON response
+            # Extract JSON
             if "```json" in content:
                 json_str = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
@@ -263,30 +272,32 @@ class GroqLLMService:
             else:
                 json_str = content
                 
-            summary_result = json.loads(json_str)
-            return summary_result
+            return json.loads(json_str)
             
         except Exception as e:
-            st.error(f"Error parsing LLM summary response: {str(e)}")
+            logger.error(f"Error parsing summary response: {str(e)}")
             return {
-                "error": "Failed to parse LLM response",
+                "error": "Failed to parse response",
                 "raw_response": response["choices"][0]["message"]["content"]
             }
     
     async def check_compliance(self, document_text: str, guidelines: str) -> Dict[str, Any]:
         """
-        Check if a document complies with specified guidelines.
+        Check document compliance with guidelines.
         
         Args:
-            document_text: The text content of the research document
-            guidelines: The guidelines to check compliance against
+            document_text: Research document text
+            guidelines: Compliance guidelines text
             
         Returns:
-            Dictionary with compliance information
+            Compliance check results
         """
+        # Truncate text
+        text = document_text[:3000]
+        
         prompt = [
             {"role": "system", "content": 
-             """You are a research compliance checker AI. Evaluate the provided document against the specified guidelines.
+             """You are a research compliance checker AI. Evaluate the document against the specified guidelines.
              Check for formatting, citation style, structural requirements, and other compliance issues.
              
              Format your response as a JSON object with the following structure:
@@ -311,7 +322,7 @@ class GroqLLMService:
              }"""
             },
             {"role": "user", "content": 
-             f"GUIDELINES:\n\n{guidelines}\n\nDOCUMENT:\n\n{document_text[:15000]}"}
+             f"GUIDELINES:\n\n{guidelines}\n\nDOCUMENT:\n\n{text}"}
         ]
         
         response = await self.generate_completion(
@@ -322,34 +333,33 @@ class GroqLLMService:
         
         try:
             content = response["choices"][0]["message"]["content"]
-            # Extract JSON response
-            if "```json" in content:
-                json_str = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                json_str = content.split("```")[1].strip()
-            else:
-                json_str = content
-                
-            compliance_result = json.loads(json_str)
-            return compliance_result
             
+            # Extract only the JSON portion
+            json_start = content.find("{")
+            json_end = content.rfind("}") + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = content[json_start:json_end]
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    return {"error": "JSON parsing failed", "content": content}
+            else:
+                return {"error": "No JSON found in response", "content": content}
+                
         except Exception as e:
-            st.error(f"Error parsing LLM compliance response: {str(e)}")
-            return {
-                "error": "Failed to parse LLM response",
-                "raw_response": response["choices"][0]["message"]["content"]
-            }
+            logger.error(f"Error parsing compliance response: {str(e)}")
+            return {"error": "Failed to parse response", "raw_response": str(response)}
 
-def initialize_llm_service():
+def initialize_llm_service(api_key: str, model: str = "llama3-8b-8192") -> LLMService:
     """
-    Initialize the LLM service with configuration.
-    Returns an instance of GroqLLMService.
+    Initialize the LLM service.
+    
+    Args:
+        api_key: Groq API key
+        model: LLM model to use
+        
+    Returns:
+        LLM service instance
     """
-    config = load_config()
-    api_key = config.get("GROQ_API_KEY")
-    model = config.get("GROQ_MODEL")
-    
-    if not api_key:
-        st.warning("Groq API key not configured. Some features may not work.")
-    
-    return GroqLLMService(api_key=api_key, model=model)
+    return LLMService(api_key=api_key, model=model)

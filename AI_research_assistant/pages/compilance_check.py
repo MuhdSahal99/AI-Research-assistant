@@ -4,6 +4,11 @@ import asyncio
 import json
 import time
 import uuid
+import sys
+
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from utils.document_processor import DocumentProcessor
 from utils.config import load_config
 from components.document_uploader import render_document_uploader
@@ -203,7 +208,6 @@ else:
                 }
                 
                 st.success("Compliance check complete!")
-                st.experimental_rerun()
                 
             except Exception as e:
                 st.error(f"Error during compliance check: {str(e)}")
@@ -211,7 +215,7 @@ else:
                 st.session_state.in_progress = False
     
     # Display compliance check results if available
-    if st.session_state.compliance_results:
+    if 'compliance_results' in st.session_state and st.session_state.compliance_results:
         results = st.session_state.compliance_results
         
         if "compliance_check" in results:
@@ -348,7 +352,7 @@ else:
             # Download results button
             st.header("Export Report")
             
-            results_json = json.dumps(st.session_state.compliance_results, default=str, indent=2)
+            results_json = json.dumps(results, default=str, indent=2)
             
             st.download_button(
                 label="Download Compliance Report",

@@ -1,5 +1,10 @@
 import streamlit as st
 from typing import Dict, Any, Callable, Optional
+import os
+import sys
+
+# Add the project root to the Python path to find utils
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from utils.document_processor import DocumentProcessor
 
 def render_document_uploader(

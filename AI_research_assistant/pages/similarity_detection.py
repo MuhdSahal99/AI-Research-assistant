@@ -2,14 +2,18 @@ import streamlit as st
 import os
 import asyncio
 import json
-import pandas as pd
 import time
-from io import BytesIO
 import uuid
+import sys
+import numpy as np
+
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from utils.document_processor import DocumentProcessor
 from utils.config import load_config
 from components.document_uploader import render_document_uploader
-import numpy as np
+from components.similarity_viewer import render_similarity_heatmap, render_similarity_network
 
 # Set page config
 st.set_page_config(
@@ -34,6 +38,10 @@ if 'reference_doc_ids' not in st.session_state:
     st.session_state.reference_doc_ids = []
 if 'in_progress' not in st.session_state:
     st.session_state.in_progress = False
+if 'primary_doc' not in st.session_state:
+    st.session_state.primary_doc = None
+if 'reference_docs' not in st.session_state:
+    st.session_state.reference_docs = []
 
 # Get services from session state
 llm_service = st.session_state.llm_service if 'llm_service' in st.session_state else None
@@ -110,9 +118,9 @@ main_col1, main_col2 = st.columns([3, 2])
 with main_col1:
     st.header("Document Comparison")
     
-    if 'primary_doc' not in st.session_state:
+    if 'primary_doc' not in st.session_state or not st.session_state.primary_doc:
         st.info("Please upload and process a primary document to analyze.")
-    elif 'reference_docs' not in st.session_state or not st.session_state.reference_docs:
+    elif not st.session_state.reference_docs:
         st.info("Please upload and process reference documents to compare against.")
     else:
         st.markdown(f"Comparing **{st.session_state.primary_doc['filename']}** against {len(st.session_state.reference_docs)} reference documents.")
@@ -208,97 +216,3 @@ with main_col1:
                     st.error(f"Error during analysis: {str(e)}")
                 finally:
                     st.session_state.in_progress = False
-
-with main_col2:
-    st.header("Analysis Results")
-    
-    if st.session_state.comparison_results:
-        results = st.session_state.comparison_results
-        
-        # Display novelty score
-        if "novelty_analysis" in results and "novelty_score" in results["novelty_analysis"]:
-            novelty_score = results["novelty_analysis"]["novelty_score"]
-            st.metric("Novelty Score", f"{novelty_score}/10")
-            
-            # Determine color based on score
-            if novelty_score >= 7:
-                color = "green"
-                verdict = "Highly Novel"
-            elif novelty_score >= 4:
-                color = "orange"
-                verdict = "Moderately Novel"
-            else:
-                color = "red"
-                verdict = "Low Novelty"
-                
-            st.markdown(f"<h3 style='color:{color};'>{verdict}</h3>", unsafe_allow_html=True)
-        
-        # Show similar documents
-        if "similarity_results" in results and results["similarity_results"]:
-            st.subheader("Similar Documents Detected")
-            
-            # Display similarity results
-            for i, result in enumerate(results["similarity_results"]):
-                st.markdown(f"**{i+1}. {result['reference_filename']}**")
-                st.markdown(f"Similarity Score: **{result['similarity_score']:.4f}**")
-                st.markdown("---")
-
-# Display full analysis results
-if st.session_state.comparison_results and "novelty_analysis" in st.session_state.comparison_results:
-    with st.expander("View Full Novelty Analysis"):
-        novelty = st.session_state.comparison_results["novelty_analysis"]
-        
-        # Display novel contributions
-        if "novel_contributions" in novelty:
-            st.subheader("Novel Contributions")
-            for contrib in novelty["novel_contributions"]:
-                significance = contrib.get("significance", "medium")
-                
-                # Set color based on significance
-                if significance == "high":
-                    sig_color = "green"
-                elif significance == "medium":
-                    sig_color = "orange"
-                else:
-                    sig_color = "gray"
-                
-                st.markdown(f"<span style='color:{sig_color};font-weight:bold;'>{significance.upper()}</span>: {contrib.get('description', '')}", unsafe_allow_html=True)
-        
-        # Display overlapping sections
-        if "overlapping_sections" in novelty:
-            st.subheader("Overlapping Content")
-            for overlap in novelty["overlapping_sections"]:
-                severity = overlap.get("severity", "medium")
-                
-                # Set color based on severity
-                if severity == "high":
-                    sev_color = "red"
-                elif severity == "medium":
-                    sev_color = "orange"
-                else:
-                    sev_color = "gray"
-                
-                st.markdown(f"<span style='color:{sev_color};font-weight:bold;'>{severity.upper()}</span>: {overlap.get('similarity_description', '')}", unsafe_allow_html=True)
-                
-                if "content" in overlap:
-                    st.markdown(f"```\n{overlap['content']}\n```")
-        
-        # Display recommendation and summary
-        if "recommendation" in novelty:
-            st.subheader("Recommendation")
-            st.markdown(novelty["recommendation"])
-        
-        if "analysis_summary" in novelty:
-            st.subheader("Analysis Summary")
-            st.markdown(novelty["analysis_summary"])
-
-# Download results button
-if st.session_state.comparison_results:
-    results_json = json.dumps(st.session_state.comparison_results, default=str, indent=2)
-    
-    st.download_button(
-        label="Download Analysis Results",
-        data=results_json,
-        file_name=f"similarity_analysis_{st.session_state.uploaded_doc_id}.json",
-        mime="application/json"
-    )

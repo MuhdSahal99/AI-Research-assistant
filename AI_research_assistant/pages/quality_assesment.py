@@ -4,12 +4,17 @@ import asyncio
 import json
 import pandas as pd
 import time
-from io import BytesIO
 import uuid
+import sys
 import plotly.graph_objects as go
+
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from utils.document_processor import DocumentProcessor
 from utils.config import load_config
 from components.document_uploader import render_document_uploader
+from utils.text_analysis import TextAnalyzer
 
 # Set page config
 st.set_page_config(
@@ -42,6 +47,9 @@ doc_processor = DocumentProcessor(
     chunk_size=config.get("CHUNK_SIZE", 1000),
     chunk_overlap=config.get("CHUNK_OVERLAP", 200)
 )
+
+# Initialize text analyzer
+text_analyzer = TextAnalyzer()
 
 # Sidebar for document upload and processing
 with st.sidebar:
@@ -87,15 +95,18 @@ else:
         
         with st.spinner("Analyzing research quality..."):
             try:
-                # This would normally be an async function, but for Streamlit we'll use a blocking approach
                 # Function to run async code in a blocking way for Streamlit
                 def run_async(coro):
                     return asyncio.run(coro)
                 
                 # Get quality analysis from LLM
-                quality_analysis = run_async(llm_service.analyze_research_quality(
-                    doc["full_text"][:15000]  # Limit size for LLM
-                ))
+                preview_text = doc_processor.get_preview_text(doc["full_text"], max_chars=10000)
+                quality_analysis = run_async(llm_service.analyze_research_quality(preview_text))
+                
+                # Perform additional text analysis
+                text_analysis_results = text_analyzer.analyze_text(doc["full_text"])
+                citation_analysis = text_analyzer.analyze_citations(doc["full_text"])
+                key_sentences = text_analyzer.extract_key_sentences(doc["full_text"], n=5)
                 
                 # Extract additional document sections
                 sections = doc_processor.extract_sections(doc["full_text"])
@@ -104,6 +115,9 @@ else:
                 # Store results in session state
                 st.session_state.quality_results = {
                     "quality_analysis": quality_analysis,
+                    "text_analysis": text_analysis_results,
+                    "citation_analysis": citation_analysis,
+                    "key_sentences": key_sentences,
                     "document_sections": sections,
                     "references": references,
                     "document": doc,
@@ -119,7 +133,7 @@ else:
                 st.session_state.in_progress = False
     
     # Display quality assessment results if available
-    if st.session_state.quality_results:
+    if 'quality_results' in st.session_state and st.session_state.quality_results:
         results = st.session_state.quality_results
         
         if "quality_analysis" in results:
@@ -201,11 +215,12 @@ else:
             st.header("Detailed Analysis")
             
             # Create tabs for each analysis category
-            tab1, tab2, tab3, tab4 = st.tabs([
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "Argument Strength", 
                 "References", 
                 "Methodology", 
-                "Structure"
+                "Structure",
+                "Text Analytics"
             ])
             
             with tab1:
@@ -259,6 +274,19 @@ else:
                     with st.expander("Extracted References"):
                         for i, ref in enumerate(results["references"]):
                             st.markdown(f"{i+1}. {ref}")
+                
+                # Display citation analysis
+                if "citation_analysis" in results:
+                    with st.expander("Citation Analysis"):
+                        citation = results["citation_analysis"]
+                        st.metric("Total Citations", citation.get("total_citations", 0))
+                        st.metric("Citation Style", citation.get("dominant_style", "Unknown").upper())
+                        
+                        if "avg_citation_age" in citation:
+                            st.metric("Average Citation Age", f"{citation['avg_citation_age']:.1f} years")
+                        
+                        if "recent_citations_percentage" in citation:
+                            st.metric("Recent Citations (≤5 years)", f"{citation['recent_citations_percentage']*100:.1f}%")
             
             with tab3:
                 if "methodology_assessment" in analysis and "issues" in analysis["methodology_assessment"]:
@@ -305,6 +333,91 @@ else:
                                       f"</div>", unsafe_allow_html=True)
                     else:
                         st.success("No significant issues found with structural consistency.")
+            
+            with tab5:
+                if "text_analysis" in results:
+                    text_analysis = results["text_analysis"]
+                    
+                    # Basic metrics
+                    st.subheader("Document Stats")
+                    metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+                    
+                    with metrics_col1:
+                        st.metric("Word Count", text_analysis["basic_metrics"]["word_count"])
+                        st.metric("Vocabulary Size", text_analysis["vocabulary_metrics"]["vocabulary_size"])
+                    
+                    with metrics_col2:
+                        st.metric("Sentence Count", text_analysis["basic_metrics"]["sentence_count"])
+                        st.metric("Lexical Diversity", f"{text_analysis['vocabulary_metrics']['lexical_diversity']:.2f}")
+                    
+                    with metrics_col3:
+                        st.metric("Avg. Sentence Length", f"{text_analysis['basic_metrics']['avg_sentence_length']:.1f} words")
+                        st.metric("Content Word Density", f"{text_analysis['vocabulary_metrics']['content_word_density']:.2f}")
+                    
+                    # Readability
+                    st.subheader("Readability")
+                    read_col1, read_col2 = st.columns(2)
+                    
+                    with read_col1:
+                        flesch = text_analysis["readability"]["flesch_reading_ease"]
+                        st.metric("Flesch Reading Ease", f"{flesch:.1f}/100")
+                        
+                        # Interpret Flesch score
+                        if flesch > 80:
+                            st.markdown("📚 **Easy to read** - 6th grade level")
+                        elif flesch > 60:
+                            st.markdown("📚 **Standard/Plain English** - 8-9th grade level")
+                        elif flesch > 50:
+                            st.markdown("📚 **Fairly difficult** - 10-12th grade level")
+                        else:
+                            st.markdown("📚 **Difficult** - College level")
+                    
+                    with read_col2:
+                        fog = text_analysis["readability"]["gunning_fog_index"]
+                        st.metric("Gunning Fog Index", f"{fog:.1f}")
+                        
+                        # Interpret Fog index
+                        if fog < 8:
+                            st.markdown("🎯 **Very readable** - Middle school level")
+                        elif fog < 12:
+                            st.markdown("🎯 **Readable** - High school level")
+                        elif fog < 17:
+                            st.markdown("🎯 **Challenging** - College level")
+                        else:
+                            st.markdown("🎯 **Difficult** - Graduate level")
+                    
+                    # Keywords
+                    st.subheader("Top Keywords")
+                    
+                    keywords = text_analysis["keywords"]
+                    if keywords:
+                        # Create a dataframe for keywords
+                        keywords_df = pd.DataFrame(keywords)
+                        
+                        # Show bar chart
+                        fig = go.Figure(data=[
+                            go.Bar(
+                                x=[kw["word"] for kw in keywords[:10]],
+                                y=[kw["count"] for kw in keywords[:10]],
+                                marker_color='lightblue'
+                            )
+                        ])
+                        
+                        fig.update_layout(
+                            title="Top 10 Keywords by Frequency",
+                            xaxis_title="Keywords",
+                            yaxis_title="Frequency",
+                            height=400
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Key sentences
+                    if "key_sentences" in results:
+                        st.subheader("Key Sentences")
+                        
+                        for i, sentence in enumerate(results["key_sentences"]):
+                            st.markdown(f"**{i+1}.** {sentence}")
             
             # Download results button
             results_json = json.dumps(st.session_state.quality_results, default=str, indent=2)

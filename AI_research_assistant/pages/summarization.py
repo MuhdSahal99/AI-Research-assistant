@@ -4,9 +4,15 @@ import asyncio
 import json
 import time
 import uuid
+import sys
+
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from utils.document_processor import DocumentProcessor
 from utils.config import load_config
 from components.document_uploader import render_document_uploader
+from utils.text_analysis import TextAnalyzer
 
 # Set page config
 st.set_page_config(
@@ -29,6 +35,8 @@ if 'doc_for_summary' not in st.session_state:
     st.session_state.doc_for_summary = None
 if 'in_progress' not in st.session_state:
     st.session_state.in_progress = False
+if 'summary_type' not in st.session_state:
+    st.session_state.summary_type = "general"
 
 # Get services from session state
 llm_service = st.session_state.llm_service if 'llm_service' in st.session_state else None
@@ -38,6 +46,9 @@ doc_processor = DocumentProcessor(
     chunk_size=config.get("CHUNK_SIZE", 1000),
     chunk_overlap=config.get("CHUNK_OVERLAP", 200)
 )
+
+# Initialize text analyzer
+text_analyzer = TextAnalyzer()
 
 # Sidebar for document upload and processing
 with st.sidebar:
@@ -80,6 +91,15 @@ with st.sidebar:
         )
         
         st.session_state.summary_type = summary_type.lower().replace("-", "_").replace(" ", "_")
+        
+        # Add summary length option
+        summary_length = st.select_slider(
+            "Summary Length",
+            options=["Brief", "Standard", "Detailed"],
+            value="Standard"
+        )
+        
+        st.session_state.summary_length = summary_length.lower()
 
 # Main content area
 if 'doc_for_summary' not in st.session_state or not st.session_state.doc_for_summary:
@@ -89,6 +109,13 @@ else:
     
     # Document info
     st.markdown(f"## Document: {doc['filename']}")
+    
+    # Extract key sentences as a preview
+    key_sentences = text_analyzer.extract_key_sentences(doc["full_text"], n=3)
+    if key_sentences:
+        with st.expander("Key Sentences Preview"):
+            for i, sentence in enumerate(key_sentences):
+                st.markdown(f"{i+1}. {sentence}")
     
     # Start summarization button
     if st.button("Generate Summary") and not st.session_state.in_progress:
@@ -102,6 +129,8 @@ else:
                 
                 # Get summary from LLM
                 summary_type = getattr(st.session_state, 'summary_type', 'general')
+                summary_length = getattr(st.session_state, 'summary_length', 'standard')
+                
                 summary = run_async(llm_service.generate_summary(
                     doc["full_text"][:15000],  # Limit size for LLM
                     summary_type=summary_type
@@ -111,18 +140,22 @@ else:
                 sections = doc_processor.extract_sections(doc["full_text"])
                 references = doc_processor.extract_references(doc["full_text"])
                 
+                # Perform text analysis
+                text_analysis = text_analyzer.analyze_text(doc["full_text"])
+                
                 # Store results in session state
                 st.session_state.summary_results = {
                     "summary": summary,
                     "summary_type": summary_type,
+                    "summary_length": summary_length,
                     "document_sections": sections,
                     "references": references,
+                    "text_analysis": text_analysis,
                     "document": doc,
                     "timestamp": time.time()
                 }
                 
                 st.success("Summary generation complete!")
-                st.experimental_rerun()
                 
             except Exception as e:
                 st.error(f"Error during summarization: {str(e)}")
@@ -130,7 +163,7 @@ else:
                 st.session_state.in_progress = False
     
     # Display summary results if available
-    if st.session_state.summary_results:
+    if 'summary_results' in st.session_state and st.session_state.summary_results:
         results = st.session_state.summary_results
         
         if "summary" in results:

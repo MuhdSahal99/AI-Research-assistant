@@ -1,16 +1,26 @@
 import httpx
 import numpy as np
-import streamlit as st
+import logging
 from typing import List, Dict, Any, Union
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from utils.config import load_config
 
-class MistralEmbeddingService:
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("embedding_service")
+
+class EmbeddingService:
     """
-    Service for generating embeddings using Mistral AI's API.
+    Service for generating text embeddings using Mistral AI API.
     """
     
     def __init__(self, api_key: str, model: str = "mistral-embed"):
+        """
+        Initialize the embedding service.
+        
+        Args:
+            api_key: Mistral API key
+            model: Embedding model to use
+        """
         self.api_key = api_key
         self.model = model
         self.api_url = "https://api.mistral.ai/v1/embeddings"
@@ -18,42 +28,92 @@ class MistralEmbeddingService:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        self.embedding_dimension = 1024  # Mistral embed dimension
-        self.max_token_length = 8000  # Maximum tokens for Mistral embedding
+        self.max_token_length = 8000  # Maximum tokens for embedding
     
     @retry(
         stop=stop_after_attempt(3), 
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError))
     )
-    async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def get_embedding(self, text: str) -> List[float]:
         """
-        Generate embeddings for a list of text chunks.
+        Generate embedding for a text string.
         
         Args:
-            texts: List of text strings to embed
+            text: Text to embed
+            
+        Returns:
+            Embedding vector
+        """
+        # Truncate text if needed
+        text = self._truncate_text(text)
+        
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                payload = {
+                    "model": self.model,
+                    "input": [text]
+                }
+                
+                response = await client.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json=payload
+                )
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                # Extract embedding
+                if "data" in result and len(result["data"]) > 0:
+                    return result["data"][0]["embedding"]
+                else:
+                    logger.error("No embedding data returned from API")
+                    return []
+                    
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+            raise
+        except httpx.RequestError as e:
+            logger.error(f"Request error occurred: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Error generating embedding: {str(e)}")
+            raise
+    
+    @retry(
+        stop=stop_after_attempt(3), 
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError))
+    )
+    async def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
+        """
+        Generate embeddings for multiple texts in an efficient batch.
+        
+        Args:
+            texts: List of texts to embed
             
         Returns:
             List of embedding vectors
         """
         if not texts:
             return []
-            
+        
+        # Truncate texts if needed
+        truncated_texts = [self._truncate_text(text) for text in texts]
+        
         try:
-            # Process in batches to avoid token limits
+            # Process in batches of 10 to avoid API limits
             batch_size = 10
             all_embeddings = []
             
-            for i in range(0, len(texts), batch_size):
-                batch_texts = texts[i:i+batch_size]
-                
-                # Truncate long texts to avoid exceeding token limits
-                batch_texts = [self._truncate_text(text) for text in batch_texts]
+            for i in range(0, len(truncated_texts), batch_size):
+                batch = truncated_texts[i:i+batch_size]
                 
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     payload = {
                         "model": self.model,
-                        "input": batch_texts
+                        "input": batch
                     }
                     
                     response = await client.post(
@@ -65,43 +125,25 @@ class MistralEmbeddingService:
                     response.raise_for_status()
                     result = response.json()
                     
-                    # Extract embeddings from response
+                    # Extract embeddings
                     batch_embeddings = [item["embedding"] for item in result["data"]]
                     all_embeddings.extend(batch_embeddings)
             
             return all_embeddings
                 
         except httpx.HTTPStatusError as e:
-            st.error(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+            logger.error(f"HTTP error in batch embedding: {e.response.status_code} - {e.response.text}")
             raise
         except httpx.RequestError as e:
-            st.error(f"Request error occurred: {str(e)}")
+            logger.error(f"Request error in batch embedding: {str(e)}")
             raise
         except Exception as e:
-            st.error(f"Error generating embeddings: {str(e)}")
+            logger.error(f"Error generating batch embeddings: {str(e)}")
             raise
-    
-    async def get_embedding(self, text: str) -> List[float]:
-        """
-        Generate embedding for a single text string.
-        
-        Args:
-            text: Text string to embed
-            
-        Returns:
-            Embedding vector
-        """
-        # Truncate long text
-        text = self._truncate_text(text)
-        
-        embeddings = await self.get_embeddings([text])
-        if embeddings:
-            return embeddings[0]
-        return [0.0] * self.embedding_dimension  # Return zero vector if embedding fails
     
     def _truncate_text(self, text: str) -> str:
         """
-        Truncate text to avoid exceeding the model's token limit.
+        Truncate text to avoid exceeding token limits.
         
         Args:
             text: Text to truncate
@@ -115,80 +157,46 @@ class MistralEmbeddingService:
         if len(text) <= char_limit:
             return text
         
-        # If text is too long, truncate to char_limit
         return text[:char_limit]
     
-    async def compute_similarity(self, text1: str, text2: str) -> float:
+    @staticmethod
+    def compute_similarity(embedding1: List[float], embedding2: List[float]) -> float:
         """
-        Compute cosine similarity between two text strings.
+        Compute cosine similarity between two embeddings.
         
         Args:
-            text1: First text string
-            text2: Second text string
+            embedding1: First embedding vector
+            embedding2: Second embedding vector
             
         Returns:
-            Similarity score between 0 and 1
+            Similarity score (0-1)
         """
-        # Get embeddings
-        embedding1 = np.array(await self.get_embedding(text1))
-        embedding2 = np.array(await self.get_embedding(text2))
+        if not embedding1 or not embedding2:
+            return 0.0
+        
+        # Convert to numpy arrays
+        vec1 = np.array(embedding1)
+        vec2 = np.array(embedding2)
         
         # Compute cosine similarity
-        dot_product = np.dot(embedding1, embedding2)
-        norm1 = np.linalg.norm(embedding1)
-        norm2 = np.linalg.norm(embedding2)
+        dot_product = np.dot(vec1, vec2)
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
         
         if norm1 == 0 or norm2 == 0:
             return 0.0
             
         similarity = dot_product / (norm1 * norm2)
         return float(similarity)
-    
-    async def batch_similarities(self, query_text: str, reference_texts: List[str]) -> List[float]:
-        """
-        Compute similarities between a query text and multiple reference texts.
-        
-        Args:
-            query_text: The query text to compare against references
-            reference_texts: List of reference texts
-            
-        Returns:
-            List of similarity scores
-        """
-        if not reference_texts:
-            return []
-            
-        # Get embeddings
-        query_embedding = np.array(await self.get_embedding(query_text))
-        reference_embeddings = await self.get_embeddings(reference_texts)
-        
-        # Compute similarities
-        similarities = []
-        for ref_embedding in reference_embeddings:
-            ref_embedding_array = np.array(ref_embedding)
-            
-            dot_product = np.dot(query_embedding, ref_embedding_array)
-            norm1 = np.linalg.norm(query_embedding)
-            norm2 = np.linalg.norm(ref_embedding_array)
-            
-            if norm1 == 0 or norm2 == 0:
-                similarities.append(0.0)
-            else:
-                similarity = dot_product / (norm1 * norm2)
-                similarities.append(float(similarity))
-        
-        return similarities
 
-def initialize_embedding_service():
+def initialize_embedding_service(api_key: str) -> EmbeddingService:
     """
-    Initialize the embedding service with configuration.
-    Returns an instance of MistralEmbeddingService.
+    Initialize the embedding service.
+    
+    Args:
+        api_key: Mistral API key
+        
+    Returns:
+        Embedding service instance
     """
-    config = load_config()
-    api_key = config.get("MISTRAL_API_KEY")
-    model = config.get("MISTRAL_EMBEDDING_MODEL", "mistral-embed")
-    
-    if not api_key:
-        st.warning("Mistral API key not configured. Embedding features will not work.")
-    
-    return MistralEmbeddingService(api_key=api_key, model=model)
+    return EmbeddingService(api_key=api_key)
